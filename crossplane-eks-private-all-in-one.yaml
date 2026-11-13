@@ -649,6 +649,7 @@ metadata:
 spec:
   forProvider:
     region: us-east-1
+    # Control plane Kubernetes version. To upgrade: bump this first, then the NodeGroup version below (one minor version at a time).
     version: "1.33"
     roleArnRef:
       name: demo-eks-cluster-role
@@ -732,6 +733,8 @@ spec:
     region: us-east-1
     clusterNameRef:
       name: demo-eks
+    # Kubernetes version of the nodes. Keep it equal to (or at most 2 minor versions behind) the control plane version.
+    version: "1.33"
     nodeRoleArnRef:
       name: demo-eks-node-role
     subnetIdRefs:
