@@ -1,0 +1,13 @@
+# Applied by 00-setup.sh AFTER the providers are healthy (the ProviderConfig CRD does not exist before that)
+---
+apiVersion: aws.upbound.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: crossplane-system
+      name: aws-secret
+      key: creds
