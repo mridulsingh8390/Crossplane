@@ -57,7 +57,7 @@ else echo "ERROR: unsupported package manager"; exit 1; fi
 
 pkg_install() {
   case "$PKG" in
-    apt) $SUDO apt-get update -y && $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+    apt) $SUDO apt-get update -y && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
     dnf) $SUDO dnf install -y "$@" ;;
     yum) $SUDO yum install -y "$@" ;;
   esac
