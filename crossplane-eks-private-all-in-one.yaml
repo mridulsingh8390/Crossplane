@@ -578,8 +578,10 @@ metadata:
 spec:
   forProvider:
     region: us-east-1
-    # MUST be an Amazon Linux 2023 AMI (the startup script needs the AWS CLI + SSM agent preinstalled)
-    ami: REPLACE_WITH_AL2023_AMI_ID
+    # MUST be an Amazon Linux 2023 AMI (the startup script needs the AWS CLI + SSM agent preinstalled).
+    # AMI IDs are region-specific and change over time. Get the latest with:
+    #   aws ssm get-parameter --region us-east-1 --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text
+    ami: ami-096ef200a877f36af
     instanceType: t3.micro
     subnetIdRef:
       name: demo-ec2-subnet
