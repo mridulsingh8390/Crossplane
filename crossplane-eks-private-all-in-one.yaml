@@ -1,5 +1,5 @@
 # ============================================================
-# Crossplane: EKS (public + private endpoint) + private EC2 in ONE file  (kubectl apply -f this-file.yaml)
+# Crossplane: EKS (public + private endpoint) + private EC2 in ONE file  (kubectl apply --validate=false -f this-file.yaml)
 #
 # CIDR plan
 #   VPC primary (nodes + EC2) : 10.0.0.0/16
