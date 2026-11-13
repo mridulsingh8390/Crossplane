@@ -654,8 +654,8 @@ spec:
     roleArnRef:
       name: demo-eks-cluster-role
     vpcConfig:
-      - endpointPrivateAccess: true
-        endpointPublicAccess: false          # no public API endpoint
+      - endpointPrivateAccess: false
+        endpointPublicAccess: true          # no public API endpoint
         subnetIdRefs:                        # node CIDR subnets (10.0.x.x)
           - name: demo-node-subnet-a
           - name: demo-node-subnet-b
