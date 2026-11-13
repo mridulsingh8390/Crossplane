@@ -32,7 +32,7 @@ spec:
 ---
 # 2. Secondary CIDR for pods
 apiVersion: ec2.aws.upbound.io/v1beta1
-kind: VPCIPv4CIDRBlockAssociation
+kind: VPCIPv4CidrBlockAssociation
 metadata:
   name: demo-vpc-pod-cidr
 spec:
@@ -716,7 +716,7 @@ spec:
       name: demo-ec2-role
     policyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
     accessScope:
-      - type: cluster
+      type: cluster
   providerConfigRef:
     name: default
 
