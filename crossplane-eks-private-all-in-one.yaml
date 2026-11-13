@@ -1,5 +1,5 @@
 # ============================================================
-# Crossplane: private EKS + private EC2 in ONE file  (kubectl apply -f this-file.yaml)
+# Crossplane: EKS (public + private endpoint) + private EC2 in ONE file  (kubectl apply -f this-file.yaml)
 #
 # CIDR plan
 #   VPC primary (nodes + EC2) : 10.0.0.0/16
@@ -641,7 +641,7 @@ spec:
     name: default
 
 ---
-# 1. EKS control plane - PRIVATE endpoint only
+# 1. EKS control plane - public + private endpoint
 apiVersion: eks.aws.upbound.io/v1beta1
 kind: Cluster
 metadata:
@@ -654,12 +654,14 @@ spec:
     roleArnRef:
       name: demo-eks-cluster-role
     vpcConfig:
-      - endpointPrivateAccess: false
-        endpointPublicAccess: true          # no public API endpoint
+      - endpointPrivateAccess: true        # nodes and the EC2 host reach the API privately inside the VPC
+        endpointPublicAccess: true         # PUBLIC endpoint enabled (reachable from the internet, IAM-authenticated)
+        publicAccessCidrs:                 # who may reach the public endpoint. Replace 0.0.0.0/0 with your IP(s), e.g. 203.0.113.10/32
+          - 0.0.0.0/0
         subnetIdRefs:                        # node CIDR subnets (10.0.x.x)
           - name: demo-node-subnet-a
           - name: demo-node-subnet-b
-        securityGroupIdRefs:                 # 443 allowed only from the EC2 SG
+        securityGroupIdRefs:                 # extra SG on the private endpoint: 443 allowed from the EC2 SG
           - name: demo-eks-api-sg
     kubernetesNetworkConfig:
       - ipFamily: ipv4
