@@ -578,15 +578,14 @@ metadata:
 spec:
   forProvider:
     region: us-east-1
-    # Replace with a valid Amazon Linux 2023 AMI ID for your region
-    ami: ami-0c7217cdde317cfec
+    # MUST be an Amazon Linux 2023 AMI (the startup script needs the AWS CLI + SSM agent preinstalled)
+    ami: REPLACE_WITH_AL2023_AMI_ID
     instanceType: t3.micro
     subnetIdRef:
       name: demo-ec2-subnet
     vpcSecurityGroupIdRefs:
       - name: demo-ec2-sg
-    iamInstanceProfileRef:
-      name: demo-ec2-profile
+    iamInstanceProfile: demo-ec2-profile
     associatePublicIpAddress: false
     # Bootstrap script: installs kubectl, waits for the private EKS API, then creates the
     # ENIConfig objects (pod CIDR) and restarts aws-node. Log: /var/log/eks-bootstrap.log
