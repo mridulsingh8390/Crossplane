@@ -1,0 +1,751 @@
+# ============================================================
+# Crossplane: private EKS + private EC2 in ONE file  (kubectl apply -f this-file.yaml)
+#
+# CIDR plan
+#   VPC primary (nodes + EC2) : 10.0.0.0/16
+#   VPC secondary (pods)      : 100.64.0.0/16   (VPC CNI custom networking)
+#   Kubernetes service CIDR   : 172.20.0.0/16
+#
+# Prereqs: provider-aws-ec2, provider-aws-eks, provider-aws-iam installed + ProviderConfig "default".
+# Resources are created in parallel; Crossplane retries anything whose dependency is not ready yet,
+# so some resources show SYNCED=False for a few minutes. That is normal.
+# The EC2 user-data script creates the ENIConfig objects automatically once the cluster is ACTIVE.
+# ============================================================
+
+---
+# 1. VPC (primary CIDR - used for nodes and the EC2 instance)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: VPC
+metadata:
+  name: demo-vpc
+spec:
+  forProvider:
+    region: us-east-1
+    cidrBlock: 10.0.0.0/16
+    enableDnsSupport: true
+    enableDnsHostnames: true
+    tags:
+      Name: demo-vpc
+  providerConfigRef:
+    name: default
+
+---
+# 2. Secondary CIDR for pods
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: VPCIPv4CIDRBlockAssociation
+metadata:
+  name: demo-vpc-pod-cidr
+spec:
+  forProvider:
+    region: us-east-1
+    cidrBlock: 100.64.0.0/16
+    vpcIdRef:
+      name: demo-vpc
+  providerConfigRef:
+    name: default
+
+---
+# 3. Public subnet (hosts ONLY the NAT gateway)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-public-subnet
+spec:
+  forProvider:
+    region: us-east-1
+    availabilityZone: us-east-1a
+    cidrBlock: 10.0.100.0/24
+    mapPublicIpOnLaunch: false
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-public-subnet
+  providerConfigRef:
+    name: default
+
+---
+# 4. Private node subnets (2 AZs - EKS requires at least 2)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-node-subnet-a
+spec:
+  forProvider:
+    region: us-east-1
+    availabilityZone: us-east-1a
+    cidrBlock: 10.0.1.0/24
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-node-subnet-a
+      kubernetes.io/role/internal-elb: "1"
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-node-subnet-b
+spec:
+  forProvider:
+    region: us-east-1
+    availabilityZone: us-east-1b
+    cidrBlock: 10.0.2.0/24
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-node-subnet-b
+      kubernetes.io/role/internal-elb: "1"
+  providerConfigRef:
+    name: default
+
+---
+# 5. Private EC2 (jump/admin host) subnet
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-ec2-subnet
+spec:
+  forProvider:
+    region: us-east-1
+    availabilityZone: us-east-1a
+    cidrBlock: 10.0.3.0/24
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-ec2-subnet
+  providerConfigRef:
+    name: default
+
+---
+# 6. Pod subnets from the secondary CIDR (one per AZ).
+# These stay in Synced=False until the secondary CIDR association above is ready - Crossplane retries automatically.
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-pod-subnet-a
+spec:
+  forProvider:
+    region: us-east-1
+    availabilityZone: us-east-1a
+    cidrBlock: 100.64.0.0/18
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-pod-subnet-a
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-pod-subnet-b
+spec:
+  forProvider:
+    region: us-east-1
+    availabilityZone: us-east-1b
+    cidrBlock: 100.64.64.0/18
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-pod-subnet-b
+  providerConfigRef:
+    name: default
+
+---
+# 7. Internet Gateway (needed only for the NAT gateway)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: InternetGateway
+metadata:
+  name: demo-igw
+spec:
+  forProvider:
+    region: us-east-1
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-igw
+  providerConfigRef:
+    name: default
+
+---
+# 8. Elastic IP + NAT Gateway (outbound-only internet for private subnets)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: EIP
+metadata:
+  name: demo-nat-eip
+spec:
+  forProvider:
+    region: us-east-1
+    domain: vpc
+    tags:
+      Name: demo-nat-eip
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: NATGateway
+metadata:
+  name: demo-nat
+spec:
+  forProvider:
+    region: us-east-1
+    allocationIdRef:
+      name: demo-nat-eip
+    subnetIdRef:
+      name: demo-public-subnet
+    tags:
+      Name: demo-nat
+  providerConfigRef:
+    name: default
+
+---
+# 9. Public route table (public subnet -> IGW)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTable
+metadata:
+  name: demo-public-rt
+spec:
+  forProvider:
+    region: us-east-1
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-public-rt
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Route
+metadata:
+  name: demo-public-route
+spec:
+  forProvider:
+    region: us-east-1
+    routeTableIdRef:
+      name: demo-public-rt
+    destinationCidrBlock: 0.0.0.0/0
+    gatewayIdRef:
+      name: demo-igw
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: demo-public-rta
+spec:
+  forProvider:
+    region: us-east-1
+    subnetIdRef:
+      name: demo-public-subnet
+    routeTableIdRef:
+      name: demo-public-rt
+  providerConfigRef:
+    name: default
+
+---
+# 10. Private route table (private subnets -> NAT)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTable
+metadata:
+  name: demo-private-rt
+spec:
+  forProvider:
+    region: us-east-1
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-private-rt
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Route
+metadata:
+  name: demo-private-route
+spec:
+  forProvider:
+    region: us-east-1
+    routeTableIdRef:
+      name: demo-private-rt
+    destinationCidrBlock: 0.0.0.0/0
+    natGatewayIdRef:
+      name: demo-nat
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: demo-node-a-rta
+spec:
+  forProvider:
+    region: us-east-1
+    subnetIdRef:
+      name: demo-node-subnet-a
+    routeTableIdRef:
+      name: demo-private-rt
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: demo-node-b-rta
+spec:
+  forProvider:
+    region: us-east-1
+    subnetIdRef:
+      name: demo-node-subnet-b
+    routeTableIdRef:
+      name: demo-private-rt
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: demo-ec2-rta
+spec:
+  forProvider:
+    region: us-east-1
+    subnetIdRef:
+      name: demo-ec2-subnet
+    routeTableIdRef:
+      name: demo-private-rt
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: demo-pod-a-rta
+spec:
+  forProvider:
+    region: us-east-1
+    subnetIdRef:
+      name: demo-pod-subnet-a
+    routeTableIdRef:
+      name: demo-private-rt
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: RouteTableAssociation
+metadata:
+  name: demo-pod-b-rta
+spec:
+  forProvider:
+    region: us-east-1
+    subnetIdRef:
+      name: demo-pod-subnet-b
+    routeTableIdRef:
+      name: demo-private-rt
+  providerConfigRef:
+    name: default
+
+---
+# 11. Security group for the private EC2 (no inbound at all - access is via SSM Session Manager)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroup
+metadata:
+  name: demo-ec2-sg
+spec:
+  forProvider:
+    region: us-east-1
+    name: demo-ec2-sg
+    description: Private EC2 - no inbound, all outbound
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-ec2-sg
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroupEgressRule
+metadata:
+  name: demo-ec2-sg-egress-all
+spec:
+  forProvider:
+    region: us-east-1
+    securityGroupIdRef:
+      name: demo-ec2-sg
+    ipProtocol: "-1"
+    cidrIpv4: 0.0.0.0/0
+  providerConfigRef:
+    name: default
+
+---
+# 12. Additional security group attached to the EKS API endpoint ENIs.
+# Only the EC2 security group may reach the API server on 443.
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroup
+metadata:
+  name: demo-eks-api-sg
+spec:
+  forProvider:
+    region: us-east-1
+    name: demo-eks-api-sg
+    description: Allow EKS API (443) only from the EC2 security group
+    vpcIdRef:
+      name: demo-vpc
+    tags:
+      Name: demo-eks-api-sg
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroupIngressRule
+metadata:
+  name: demo-eks-api-from-ec2
+spec:
+  forProvider:
+    region: us-east-1
+    securityGroupIdRef:
+      name: demo-eks-api-sg
+    referencedSecurityGroupIdRef:
+      name: demo-ec2-sg
+    ipProtocol: tcp
+    fromPort: 443
+    toPort: 443
+  providerConfigRef:
+    name: default
+
+---
+# 13. IAM - EKS cluster role
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: demo-eks-cluster-role
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: demo-eks-cluster-policy
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+    roleRef:
+      name: demo-eks-cluster-role
+  providerConfigRef:
+    name: default
+
+---
+# 14. IAM - worker node role
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: demo-eks-node-role
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: demo-eks-node-worker-policy
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+    roleRef:
+      name: demo-eks-node-role
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: demo-eks-node-cni-policy
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+    roleRef:
+      name: demo-eks-node-role
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: demo-eks-node-ecr-policy
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+    roleRef:
+      name: demo-eks-node-role
+  providerConfigRef:
+    name: default
+
+---
+# 15. IAM - role + instance profile for the private EC2 (SSM access)
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: demo-ec2-role
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: demo-ec2-ssm-policy
+spec:
+  forProvider:
+    policyArn: arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+    roleRef:
+      name: demo-ec2-role
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: InstanceProfile
+metadata:
+  name: demo-ec2-profile
+spec:
+  forProvider:
+    roleRef:
+      name: demo-ec2-role
+  providerConfigRef:
+    name: default
+
+---
+# EC2 role - allow the bootstrap script to discover cluster + pod subnet details
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Policy
+metadata:
+  name: demo-ec2-bootstrap-policy
+spec:
+  forProvider:
+    policy: |
+      {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["eks:DescribeCluster","ec2:DescribeSubnets"],"Resource":"*"}]}
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: RolePolicyAttachment
+metadata:
+  name: demo-ec2-bootstrap-policy-attach
+spec:
+  forProvider:
+    policyArnRef:
+      name: demo-ec2-bootstrap-policy
+    roleRef:
+      name: demo-ec2-role
+  providerConfigRef:
+    name: default
+
+---
+# 16. Private EC2 instance (no public IP)
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Instance
+metadata:
+  name: demo-ec2-instance
+spec:
+  forProvider:
+    region: us-east-1
+    # Replace with a valid Amazon Linux 2023 AMI ID for your region
+    ami: ami-0c7217cdde317cfec
+    instanceType: t3.micro
+    subnetIdRef:
+      name: demo-ec2-subnet
+    vpcSecurityGroupIdRefs:
+      - name: demo-ec2-sg
+    iamInstanceProfileRef:
+      name: demo-ec2-profile
+    associatePublicIpAddress: false
+    # Bootstrap script: installs kubectl, waits for the private EKS API, then creates the
+    # ENIConfig objects (pod CIDR) and restarts aws-node. Log: /var/log/eks-bootstrap.log
+    userData: |
+      #!/bin/bash
+      exec > /var/log/eks-bootstrap.log 2>&1
+      export HOME=/root
+      REGION=us-east-1
+      CLUSTER=demo-eks
+
+      until curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl"; do sleep 15; done
+      chmod +x /usr/local/bin/kubectl
+
+      echo "Waiting for EKS cluster to be ACTIVE..."
+      until [ "$(aws eks describe-cluster --name $CLUSTER --region $REGION --query cluster.status --output text 2>/dev/null)" = "ACTIVE" ]; do sleep 30; done
+      aws eks update-kubeconfig --name $CLUSTER --region $REGION
+
+      echo "Waiting for API access (access entry) and ENIConfig CRD..."
+      until kubectl get ns >/dev/null 2>&1; do sleep 30; done
+      until kubectl get crd eniconfigs.crd.k8s.amazonaws.com >/dev/null 2>&1; do sleep 15; done
+
+      SG=""
+      until [ -n "$SG" ] && [ "$SG" != "None" ]; do
+        SG=$(aws eks describe-cluster --name $CLUSTER --region $REGION --query cluster.resourcesVpcConfig.clusterSecurityGroupId --output text 2>/dev/null)
+        sleep 5
+      done
+
+      for AZ in a b; do
+        SUBNET=""
+        until [ -n "$SUBNET" ] && [ "$SUBNET" != "None" ]; do
+          SUBNET=$(aws ec2 describe-subnets --region $REGION --filters Name=tag:Name,Values=demo-pod-subnet-$AZ --query 'Subnets[0].SubnetId' --output text 2>/dev/null)
+          sleep 5
+        done
+        cat <<EOF | kubectl apply -f -
+      apiVersion: crd.k8s.amazonaws.com/v1alpha1
+      kind: ENIConfig
+      metadata:
+        name: ${REGION}${AZ}
+      spec:
+        subnet: ${SUBNET}
+        securityGroups:
+          - ${SG}
+      EOF
+      done
+
+      kubectl -n kube-system rollout restart daemonset/aws-node || true
+      echo "Bootstrap complete"
+    tags:
+      Name: demo-ec2-instance
+  providerConfigRef:
+    name: default
+
+---
+# 1. EKS control plane - PRIVATE endpoint only
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: Cluster
+metadata:
+  name: demo-eks
+spec:
+  forProvider:
+    region: us-east-1
+    version: "1.33"
+    roleArnRef:
+      name: demo-eks-cluster-role
+    vpcConfig:
+      - endpointPrivateAccess: true
+        endpointPublicAccess: false          # no public API endpoint
+        subnetIdRefs:                        # node CIDR subnets (10.0.x.x)
+          - name: demo-node-subnet-a
+          - name: demo-node-subnet-b
+        securityGroupIdRefs:                 # 443 allowed only from the EC2 SG
+          - name: demo-eks-api-sg
+    kubernetesNetworkConfig:
+      - ipFamily: ipv4
+        serviceIpv4Cidr: 172.20.0.0/16       # service CIDR (separate from node and pod CIDRs)
+    accessConfig:
+      - authenticationMode: API_AND_CONFIG_MAP
+  providerConfigRef:
+    name: default
+
+---
+# 2. VPC CNI add-on with custom networking enabled (pods use the 100.64.0.0/16 subnets via ENIConfig)
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: Addon
+metadata:
+  name: demo-eks-vpc-cni
+spec:
+  forProvider:
+    region: us-east-1
+    clusterNameRef:
+      name: demo-eks
+    addonName: vpc-cni
+    resolveConflictsOnCreate: OVERWRITE
+    resolveConflictsOnUpdate: OVERWRITE
+    configurationValues: '{"env":{"AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG":"true","ENI_CONFIG_LABEL_DEF":"topology.kubernetes.io/zone"}}'
+  providerConfigRef:
+    name: default
+
+---
+# 3. Let the EC2 role authenticate to the cluster (cluster-admin)
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: AccessEntry
+metadata:
+  name: demo-ec2-access-entry
+spec:
+  forProvider:
+    region: us-east-1
+    clusterNameRef:
+      name: demo-eks
+    principalArnRef:
+      name: demo-ec2-role
+    type: STANDARD
+  providerConfigRef:
+    name: default
+
+---
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: AccessPolicyAssociation
+metadata:
+  name: demo-ec2-access-policy
+spec:
+  forProvider:
+    region: us-east-1
+    clusterNameRef:
+      name: demo-eks
+    principalArnRef:
+      name: demo-ec2-role
+    policyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+    accessScope:
+      - type: cluster
+  providerConfigRef:
+    name: default
+
+---
+# Managed node group (t2.large) - retries until the cluster is ACTIVE
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: NodeGroup
+metadata:
+  name: demo-eks-nodegroup
+spec:
+  forProvider:
+    region: us-east-1
+    clusterNameRef:
+      name: demo-eks
+    nodeRoleArnRef:
+      name: demo-eks-node-role
+    subnetIdRefs:
+      - name: demo-node-subnet-a
+      - name: demo-node-subnet-b
+    instanceTypes:
+      - t2.large
+    amiType: AL2023_x86_64_STANDARD
+    capacityType: ON_DEMAND
+    diskSize: 30
+    scalingConfig:
+      - desiredSize: 2
+        minSize: 1
+        maxSize: 3
+    tags:
+      Name: demo-eks-nodegroup
+  providerConfigRef:
+    name: default
