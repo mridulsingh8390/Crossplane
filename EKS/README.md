@@ -5,7 +5,7 @@ Run **Crossplane** on a local **kind** cluster and use it to create a private ne
 | File | Purpose |
 |---|---|
 | `00-setup.sh` | Installs the tools, kind, Crossplane and the AWS providers, applies the YAML, then brings SSM up |
-| `crossplane-eks-private-all-in-one.yaml` | All AWS resources (VPC, NAT, SSM endpoints, EC2, EKS, node group) |
+| `crossplane-eks-all-in-one.yaml` | All AWS resources (VPC, NAT, SSM endpoints, EC2, EKS, node group) |
 
 ---
 
