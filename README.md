@@ -4,7 +4,7 @@ Run Crossplane on a local kind cluster and use it to create a Kubernetes cluster
 
 | Cloud | Guide | Setup script | Manifest |
 |---|---|---|---|
-| AWS (EKS) | [README.md](README.md) | `00-setup.sh` | `crossplane-eks-private-all-in-one.yaml` |
+| AWS (EKS) | [README.md](README.md) | `00-setup.sh` | `crossplane-eks-all-in-one.yaml` |
 | Azure (AKS) | [README.md](README.md) | `00-setup-aks.sh` | `crossplane-aks-all-in-one.yaml` |
 
 Each guide is self-contained: what Crossplane is, what gets created, requirements, run, connect, upgrade, delete, manual install, security notes and troubleshooting.
