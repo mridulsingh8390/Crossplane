@@ -111,7 +111,7 @@ Put the script and the YAML in the same folder:
 
 ```bash
 chmod 700 00-setup.sh
-./00-setup.sh crossplane-eks-private-all-in-one.yaml
+./00-setup.sh crossplane-eks-all-in-one.yaml
 ```
 
 Steps: tools, kind, Crossplane, providers (EC2, EKS, IAM), credentials secret, `ProviderConfig`, apply the YAML, then **enable SSM**:
