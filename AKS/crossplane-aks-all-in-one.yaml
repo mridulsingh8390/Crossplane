@@ -1,0 +1,116 @@
+# ============================================================
+# Crossplane: AKS cluster (public API endpoint) in ONE file   (kubectl apply --validate=false -f this-file.yaml)
+#
+# CIDR plan
+#   VNet / nodes          : 10.0.0.0/16  (node subnet 10.0.1.0/24)
+#   Pods (Azure CNI Overlay, virtual - not part of the VNet) : 10.244.0.0/16
+#   Kubernetes services   : 172.20.0.0/16  (DNS service IP 172.20.0.10)
+#
+# Prereqs: provider-family-azure, provider-azure-network, provider-azure-containerservice installed
+#          + ProviderConfig "default" (00-setup-aks.sh does all of this).
+# Resources are created in parallel; Crossplane retries anything whose dependency is not ready yet,
+# so some resources show SYNCED=False for a few minutes. That is normal.
+#
+# Kubernetes version: kubernetesVersion (control plane) and orchestratorVersion (node pool) both live in the
+# KubernetesCluster below. REPLACE_K8S_VERSION is filled in by 00-setup-aks.sh (latest supported patch of the
+# default AKS version), or put a real version such as "1.32.7" yourself.
+# To upgrade: change BOTH lines to the next minor version (one minor at a time) and re-apply.
+# ============================================================
+
+---
+# 1. Resource group
+apiVersion: azure.upbound.io/v1beta1
+kind: ResourceGroup
+metadata:
+  name: demo-aks-rg
+spec:
+  forProvider:
+    location: eastus
+    tags:
+      environment: demo
+      managed-by: crossplane
+  providerConfigRef:
+    name: default
+
+---
+# 2. Virtual network (node CIDR)
+apiVersion: network.azure.upbound.io/v1beta1
+kind: VirtualNetwork
+metadata:
+  name: demo-aks-vnet
+spec:
+  forProvider:
+    location: eastus
+    addressSpace:
+      - 10.0.0.0/16
+    resourceGroupNameRef:
+      name: demo-aks-rg
+    tags:
+      environment: demo
+  providerConfigRef:
+    name: default
+
+---
+# 3. Node subnet
+apiVersion: network.azure.upbound.io/v1beta1
+kind: Subnet
+metadata:
+  name: demo-aks-nodes-subnet
+spec:
+  forProvider:
+    addressPrefixes:
+      - 10.0.1.0/24
+    resourceGroupNameRef:
+      name: demo-aks-rg
+    virtualNetworkNameRef:
+      name: demo-aks-vnet
+  providerConfigRef:
+    name: default
+
+---
+# 4. AKS cluster: public API endpoint, one node pool, separate node / pod / service CIDRs
+apiVersion: containerservice.azure.upbound.io/v1beta1
+kind: KubernetesCluster
+metadata:
+  name: demo-aks
+spec:
+  forProvider:
+    location: eastus
+    resourceGroupNameRef:
+      name: demo-aks-rg
+    dnsPrefix: demo-aks
+    # Control plane Kubernetes version. To upgrade: bump this AND orchestratorVersion below (one minor version at a time).
+    kubernetesVersion: "REPLACE_K8S_VERSION"
+    skuTier: Free
+    identity:
+      - type: SystemAssigned
+    # The single node pool (2 vCPU / 8 GB nodes, the same size class as t2.large)
+    defaultNodePool:
+      - name: system
+        vmSize: Standard_D2s_v3
+        nodeCount: 2
+        osDiskSizeGb: 30
+        # Kubernetes version of the nodes. Keep it equal to the control plane version.
+        orchestratorVersion: "REPLACE_K8S_VERSION"
+        vnetSubnetIdRef:
+          name: demo-aks-nodes-subnet
+    networkProfile:
+      - networkPlugin: azure
+        networkPluginMode: overlay          # pods get IPs from podCidr, not from the VNet
+        podCidr: 10.244.0.0/16
+        serviceCidr: 172.20.0.0/16          # service CIDR (separate from node and pod CIDRs)
+        dnsServiceIp: 172.20.0.10
+        loadBalancerSku: standard
+        outboundType: loadBalancer
+    # PUBLIC API endpoint. Recommended: restrict who can reach it by uncommenting and replacing the IP.
+    # apiServerAccessProfile:
+    #   - authorizedIpRanges:
+    #       - 203.0.113.10/32
+    tags:
+      environment: demo
+  # kubeconfig is published to this secret (00-setup-aks.sh writes it to ~/aks.kubeconfig)
+  writeConnectionSecretToRef:
+    name: demo-aks-kubeconfig
+    namespace: crossplane-system
+  providerConfigRef:
+    name: default
